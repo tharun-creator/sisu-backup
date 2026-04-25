@@ -10,7 +10,6 @@ import {
   CheckCircle, 
   ArrowLeft,
   XCircle,
-  MoreVertical,
   Trash2,
   Users,
   Clock3,
@@ -19,6 +18,7 @@ import {
 import Link from "next/link";
 import Calendar from "@/components/ui/Calendar";
 import { format, isSameDay } from "date-fns";
+import { parseAppointmentDate } from "@/lib/datetime";
 
 type Appointment = {
   id: string;
@@ -38,7 +38,11 @@ type Appointment = {
 };
 
 export default function Dashboard() {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      sessionStorage.getItem("admin_auth") === "true",
+  );
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [appointments, setAppointments] = useState<Appointment[]>([]);
@@ -59,12 +63,6 @@ export default function Dashboard() {
     }
   };
 
-  useEffect(() => {
-    if (sessionStorage.getItem("admin_auth") === "true") {
-      setIsAuthenticated(true);
-    }
-  }, []);
-
   const fetchAppointments = useCallback(async () => {
     if (!isAuthenticated) return;
     try {
@@ -84,21 +82,29 @@ export default function Dashboard() {
   }, [isAuthenticated]);
 
   useEffect(() => {
-    fetchAppointments();
+    const initialLoad = setTimeout(() => {
+      void fetchAppointments();
+    }, 0);
     const interval = setInterval(fetchAppointments, 10000); // Auto-refresh every 10s
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(initialLoad);
+      clearInterval(interval);
+    };
   }, [fetchAppointments]);
 
   const updateStatus = async (id: string, status: string) => {
     try {
-      await fetch("/api/appointments", {
+      const response = await fetch("/api/appointments", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, status }),
       });
-      setAppointments((prev) => 
-        prev.map((a) => a.id === id ? { ...a, status: status as any } : a)
-      );
+
+      if (!response.ok) {
+        throw new Error("Failed to update appointment");
+      }
+
+      await fetchAppointments();
     } catch (err) {
       console.error(err);
     }
@@ -121,7 +127,7 @@ export default function Dashboard() {
   const safeAppointments = Array.isArray(appointments) ? appointments : [];
 
   const filteredAppointments = safeAppointments.filter(appt => 
-    selectedDate ? isSameDay(new Date(appt.date), selectedDate) : true
+    selectedDate ? isSameDay(parseAppointmentDate(appt.date), selectedDate) : true
   );
 
   const stats = {
@@ -283,7 +289,7 @@ export default function Dashboard() {
 
                           <div className="bg-black/40 p-5 rounded-2xl border border-white/5 mb-8">
                             <p className="text-[10px] uppercase tracking-widest text-white/30 font-bold mb-2">Discussion Topic</p>
-                            <p className="text-sm text-white/70 leading-relaxed italic">"{appt.reason}"</p>
+                            <p className="text-sm text-white/70 leading-relaxed italic">&ldquo;{appt.reason}&rdquo;</p>
                           </div>
 
                           <div className="flex gap-3">
@@ -470,7 +476,7 @@ export default function Dashboard() {
                           </tr>
                         ) : (
                           safeAppointments
-                            .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                            .sort((a, b) => parseAppointmentDate(b.date).getTime() - parseAppointmentDate(a.date).getTime())
                             .map((appt) => (
                             <tr key={appt.id} className={`group hover:bg-white/[0.02] transition-colors ${selectedAppointment?.id === appt.id ? 'bg-white/[0.05]' : ''}`}>
                               <td className="px-6 py-4">

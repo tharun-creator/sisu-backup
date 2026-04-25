@@ -10,7 +10,14 @@ type Message = {
   role: "user" | "bot";
   content: string;
   type?: "text" | "date-picker" | "slots";
-  availableSlots?: any[];
+  availableSlots?: Slot[];
+};
+
+type Slot = {
+  id?: string | number;
+  date: string;
+  time: string;
+  displayDate?: string;
 };
 
 export function ChatWidget() {
@@ -102,7 +109,7 @@ export function ChatWidget() {
     }
   };
 
-  const handleSlotSelect = async (slot: any) => {
+  const handleSlotSelect = async (slot: Slot) => {
     // Use displayDate if available, otherwise fall back to date
     const displayDate = slot.displayDate || slot.date;
     const userMsg = `I'll pick ${displayDate} at ${slot.time}`;
@@ -191,7 +198,7 @@ export function ChatWidget() {
                   )}
                   {msg.type === "slots" && msg.availableSlots && (
                     <div className="space-y-2">
-                      {msg.availableSlots.map((slot: any) => (
+                      {msg.availableSlots.map((slot) => (
                         <button
                           key={slot.id}
                           onClick={() => handleSlotSelect(slot)}

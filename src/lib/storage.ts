@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import { Pool } from "pg";
 import { Resend } from "resend";
+import { formatAppointmentDate } from "@/lib/datetime";
 
 const APPOINTMENTS_FILE = path.join(process.cwd(), "pending_appointments.json");
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -386,9 +387,9 @@ export async function sendAppointmentEmail(
   };
 
   const messages = {
-    accepted: `Hello ${appointment.client},\n\nYour meeting with RATS has been confirmed for ${appointment.date} at ${appointment.time}.\n\nWe look forward to seeing you!\n\nBest,\nSISU Team`,
+    accepted: `Hello ${appointment.client},\n\nYour meeting with RATS has been confirmed for ${formatAppointmentDate(appointment.date)} at ${appointment.time}.\n\nWe look forward to seeing you!\n\nBest,\nSISU Team`,
     declined: `Hello ${appointment.client},\n\nThank you for your interest in SISU Mentorship. Unfortunately, RATS is unable to accommodate your request at this time.\n\nBest regards,\nSISU Team`,
-    rescheduled: `Hello ${appointment.client},\n\nRATS would like to reschedule your session. Please check the dashboard or contact us for new availability.\n\nBest,\nSISU Team`,
+    rescheduled: `Hello ${appointment.client},\n\nYour requested slot was no longer available, so your session has been moved to ${formatAppointmentDate(appointment.date)} at ${appointment.time}.\n\nIf this time does not work, please reply to this email and we will help you with another slot.\n\nBest,\nSISU Team`,
   };
 
   try {

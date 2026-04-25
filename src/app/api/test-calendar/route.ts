@@ -11,14 +11,20 @@ export async function GET() {
     email: "mohan@example.com", // You can change this to your email
     company: "Test Co",
     reason: "Integration Testing",
-    date: new Date(Date.now() + 86400000).toLocaleDateString("en-US", { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+    date: new Date(Date.now() + 86400000).toISOString().slice(0, 10),
     time: "10:00 AM"
   };
 
   try {
     const result = await createCalendarEvent(testAppt);
     return NextResponse.json(result);
-  } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message || error }, { status: 500 });
+  } catch (error: unknown) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 },
+    );
   }
 }

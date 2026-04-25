@@ -11,12 +11,12 @@ import {
   endOfWeek, 
   isSameMonth, 
   isSameDay, 
-  addDays, 
   eachDayOfInterval,
   isBefore,
   startOfToday
 } from 'date-fns';
 import { ChevronLeft, ChevronRight, Clock } from 'lucide-react';
+import { APPOINTMENT_SLOT_TIMES } from '@/lib/datetime';
 
 interface ChatCalendarProps {
   onSelect: (date: string, time: string) => void;
@@ -27,7 +27,7 @@ export function ChatCalendar({ onSelect }: ChatCalendarProps) {
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
 
-  const times = ["10:00 AM", "11:30 AM", "2:00 PM", "4:30 PM", "6:00 PM"];
+  const times = [...APPOINTMENT_SLOT_TIMES];
 
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(monthStart);

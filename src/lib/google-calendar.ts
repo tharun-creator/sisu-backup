@@ -1,4 +1,10 @@
 import { google } from 'googleapis';
+import {
+  APPOINTMENT_SLOT_TIMES,
+  APPOINTMENT_TIME_ZONE,
+  buildCalendarDateTime,
+  parseTimeLabel,
+} from "@/lib/datetime";
 
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
@@ -26,8 +32,11 @@ async function getCalendarClient() {
       const { credentials: newCredentials } = await oauth2Client.refreshAccessToken();
       oauth2Client.setCredentials(newCredentials);
       console.log(' Token refreshed successfully');
-    } catch (refreshError: any) {
-      console.error(' Failed to refresh token:', refreshError.message);
+    } catch (refreshError: unknown) {
+      console.error(
+        ' Failed to refresh token:',
+        refreshError instanceof Error ? refreshError.message : String(refreshError),
+      );
       throw new Error('Failed to refresh Google token. Please re-authenticate.');
     }
   }
@@ -43,54 +52,26 @@ function isValidEmail(email: string): boolean {
   return emailRegex.test(email);
 }
 
-/**
- * Parse time string to hours and minutes (24-hour format)
- * Supports: "10:00 AM", "2:00 PM", "6:00 PM", etc.
- */
-function parseTime(timeStr: string): { hours: number; minutes: number } | null {
-  const timeMatch = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
-  if (!timeMatch) {
-    console.error('Invalid time format:', timeStr);
-    return null;
-  }
-  
-  let hours = parseInt(timeMatch[1], 10);
-  const minutes = parseInt(timeMatch[2], 10);
-  const period = timeMatch[3].toUpperCase();
-  
-  // Convert to 24-hour format
-  if (period === 'PM' && hours !== 12) {
-    hours += 12;
-  } else if (period === 'AM' && hours === 12) {
-    hours = 0;
-  }
-  
-  return { hours, minutes };
-}
+function buildOffsetDateTime(date: string, time: string, durationMinutes = 0) {
+  const { hours, minutes } = parseTimeLabel(time);
+  const utcMillis = Date.UTC(
+    Number.parseInt(date.slice(0, 4), 10),
+    Number.parseInt(date.slice(5, 7), 10) - 1,
+    Number.parseInt(date.slice(8, 10), 10),
+    hours - 5,
+    minutes - 30 + durationMinutes,
+    0,
+    0,
+  );
+  const end = new Date(utcMillis);
+  const local = new Date(end.getTime() + 5.5 * 60 * 60 * 1000);
+  const localDate = local.toISOString().slice(0, 10);
+  const localTime = local.toISOString().slice(11, 19);
 
-/**
- * Parse date string to Date object
- * Supports both formats:
- * - ISO: "2026-04-29"
- * - Human-readable: "Saturday, April 25, 2026"
- */
-function parseDate(dateStr: string): Date | null {
-  let dateObj: Date;
-  
-  // Try ISO format first (e.g., "2026-04-29")
-  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-    dateObj = new Date(dateStr + 'T12:00:00');
-  } else {
-    // Try human-readable format
-    dateObj = new Date(dateStr + 'T12:00:00');
-  }
-  
-  if (isNaN(dateObj.getTime())) {
-    console.error('Invalid date:', dateStr);
-    return null;
-  }
-  
-  return dateObj;
+  return {
+    dateTime: `${localDate}T${localTime}+05:30`,
+    timeZone: APPOINTMENT_TIME_ZONE,
+  };
 }
 
 export async function createCalendarEvent(appt: {
@@ -125,39 +106,24 @@ export async function createCalendarEvent(appt: {
     // Get calendar client (handles token refresh)
     const calendar = await getCalendarClient();
 
-    // Parse date
-    const dateObj = parseDate(appt.date);
-    if (!dateObj) {
-      console.error(' Failed to parse date:', appt.date);
-      return { success: false, error: 'Invalid date format: ' + appt.date };
-    }
-
-    // Parse time
-    const time = parseTime(appt.time);
-    if (!time) {
+    try {
+      parseTimeLabel(appt.time);
+    } catch {
       console.error(' Failed to parse time:', appt.time);
       return { success: false, error: 'Invalid time format: ' + appt.time };
     }
 
-    // Set the time on the date object
-    dateObj.setHours(time.hours, time.minutes, 0, 0);
+    const start = buildCalendarDateTime(appt.date, appt.time);
+    const end = buildOffsetDateTime(appt.date, appt.time, 60);
 
-    console.log(' Parsed datetime:', dateObj.toISOString());
-
-    const endObj = new Date(dateObj.getTime() + 60 * 60 * 1000); // 1 hour duration
-    console.log(' End datetime:', endObj.toISOString());
+    console.log(' Parsed datetime:', start.dateTime);
+    console.log(' End datetime:', end.dateTime);
 
     const event = {
       summary: `SISU Mentorship: ${appt.client} (${appt.company})`,
       description: `Discussion Topic: ${appt.reason}\nClient Email: ${appt.email}\n\nBooked via SISU Website`,
-      start: {
-        dateTime: dateObj.toISOString(),
-        timeZone: 'Asia/Kolkata', // IST timezone for RATS
-      },
-      end: {
-        dateTime: endObj.toISOString(),
-        timeZone: 'Asia/Kolkata',
-      },
+      start,
+      end,
       attendees: [{ email: appt.email }],
       reminders: {
         useDefault: false,
@@ -177,12 +143,63 @@ export async function createCalendarEvent(appt: {
     console.log(' Google Calendar event created successfully!');
     console.log(' Event link:', response.data.htmlLink);
     return { success: true, data: response.data };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error(' Error creating Google Calendar event:');
-    console.error('Message:', error.message);
-    console.error('Code:', error.code);
+    console.error('Message:', error instanceof Error ? error.message : String(error));
     console.error('Full error:', JSON.stringify(error, null, 2));
-    return { success: false, error: error.message || error };
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function getBusyCalendarSlots(startDate: string, endDate: string) {
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET || !process.env.GOOGLE_REFRESH_TOKEN) {
+    return [];
+  }
+
+  try {
+    const calendar = await getCalendarClient();
+    const timeMin = `${startDate}T00:00:00+05:30`;
+    const timeMax = `${endDate}T23:59:59+05:30`;
+    const response = await calendar.freebusy.query({
+      requestBody: {
+        timeMin,
+        timeMax,
+        timeZone: APPOINTMENT_TIME_ZONE,
+        items: [{ id: "primary" }],
+      },
+    });
+
+    const busy = response.data.calendars?.primary?.busy ?? [];
+    const slots: { date: string; time: string }[] = [];
+
+    for (const entry of busy) {
+      const start = entry.start ? new Date(entry.start) : null;
+      const end = entry.end ? new Date(entry.end) : null;
+
+      if (!start || !end || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+        continue;
+      }
+
+      for (const dateCursor = new Date(`${startDate}T12:00:00`);
+        dateCursor <= new Date(`${endDate}T12:00:00`);
+        dateCursor.setDate(dateCursor.getDate() + 1)) {
+        const date = dateCursor.toISOString().slice(0, 10);
+
+        for (const time of APPOINTMENT_SLOT_TIMES) {
+          const slotStart = new Date(buildCalendarDateTime(date, time).dateTime);
+          const slotEnd = new Date(buildOffsetDateTime(date, time, 60).dateTime);
+
+          if (slotStart < end && slotEnd > start) {
+            slots.push({ date, time });
+          }
+        }
+      }
+    }
+
+    return slots;
+  } catch (error) {
+    console.error("Failed to read Google Calendar busy slots:", error);
+    return [];
   }
 }
 
@@ -206,8 +223,11 @@ export async function deleteCalendarEvent(eventId: string) {
     });
     console.log(' Event deleted successfully');
     return { success: true };
-  } catch (error: any) {
-    console.error('Error deleting calendar event:', error.message || error);
-    return { success: false, error: error.message || error };
+  } catch (error: unknown) {
+    console.error(
+      'Error deleting calendar event:',
+      error instanceof Error ? error.message : String(error),
+    );
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
   }
 }

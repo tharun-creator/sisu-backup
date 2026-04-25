@@ -11,10 +11,10 @@ import {
   endOfWeek, 
   isSameMonth, 
   isSameDay, 
-  addDays, 
   eachDayOfInterval 
 } from 'date-fns';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { parseAppointmentDate } from '@/lib/datetime';
 
 interface CalendarProps {
   selectedDate: Date | null;
@@ -80,7 +80,7 @@ export default function Calendar({ selectedDate, onDateSelect, appointments = []
       const formattedDate = format(day, 'd');
       const isSelected = selectedDate ? isSameDay(day, selectedDate) : false;
       const isCurrentMonth = isSameMonth(day, monthStart);
-      const dayAppointments = appointments.filter(appt => isSameDay(new Date(appt.date), day));
+      const dayAppointments = appointments.filter(appt => isSameDay(parseAppointmentDate(appt.date), day));
 
       days.push(
         <div

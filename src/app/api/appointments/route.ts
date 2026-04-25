@@ -1,16 +1,23 @@
 import { NextResponse } from "next/server";
-import { loadAppointments, saveAppointments, addAppointment, updateAppointment, deleteAppointment, sendAppointmentEmail } from "@/lib/storage";
+import {
+  addAppointment,
+  deleteAppointment,
+  loadAppointments,
+  sendAppointmentEmail,
+  updateAppointment,
+} from "@/lib/storage";
 import { createCalendarEvent, deleteCalendarEvent } from "@/lib/google-calendar";
+import { compareAppointmentSlots, formatAppointmentDate } from "@/lib/datetime";
+import {
+  buildRescheduleLog,
+  reserveBestAvailableSlot,
+} from "@/lib/scheduling";
+import type { Appointment } from "@/lib/storage";
 
 export async function GET() {
   try {
     const appts = await loadAppointments();
-    // Sort by date and time
-    const sorted = appts.sort((a: any, b: any) => {
-      const dateA = new Date(a.date).getTime();
-      const dateB = new Date(b.date).getTime();
-      return dateA - dateB;
-    });
+    const sorted = [...appts].sort(compareAppointmentSlots);
     return NextResponse.json(sorted);
   } catch (error) {
     console.error("Failed to fetch appointments:", error);
@@ -25,7 +32,7 @@ export async function POST(req: Request) {
 
     if (action === "delete" || (!action && id && !client)) {
       const appts = await loadAppointments();
-      const target = appts.find((a: any) => a.id === id);
+      const target = appts.find((a: Appointment) => a.id === id);
       if (target && target.email) {
         await sendAppointmentEmail(target, 'declined');
       }
@@ -39,29 +46,56 @@ export async function POST(req: Request) {
 
     // New Appointment Creation
     if (client && email && date && time) {
+      const reservedSlot = await reserveBestAvailableSlot({ date, time });
+
+      if (!reservedSlot) {
+        return NextResponse.json(
+          { error: "No open appointment slots are available right now." },
+          { status: 409 },
+        );
+      }
+
+      const logs = [
+        {
+          status: "pending",
+          timestamp: new Date().toISOString(),
+          note: "Appointment request submitted via website form",
+        },
+      ];
+
+      if (reservedSlot.rescheduled) {
+        logs.push(
+          buildRescheduleLog(
+            { date, time },
+            reservedSlot.assigned,
+            "Requested slot was already booked.",
+          ),
+        );
+      }
+
       const appt = {
         id: `appt-${Date.now()}`,
         client,
         company: company || "N/A",
         email,
         reason: reason || "No reason provided",
-        date,
-        time,
+        date: reservedSlot.assigned.date,
+        time: reservedSlot.assigned.time,
         requested: new Date().toLocaleDateString("en-US", { day: 'numeric', month: 'short', year: 'numeric' }),
         status: "pending",
         calendarEventId: null,
-        logs: [
-          {
-            status: "pending",
-            timestamp: new Date().toISOString(),
-            note: "Appointment request submitted via website form"
-          }
-        ]
+        logs,
       };
       
       await addAppointment(appt);
       
-      return NextResponse.json({ success: true, id: appt.id });
+      return NextResponse.json({
+        success: true,
+        id: appt.id,
+        appointment: appt,
+        rescheduled: reservedSlot.rescheduled,
+        requestedSlot: reservedSlot.requested,
+      });
     }
 
     return NextResponse.json({ error: "Invalid action or missing fields" }, { status: 400 });
@@ -77,7 +111,7 @@ export async function PATCH(req: Request) {
     const { id, status } = body;
     const appts = await loadAppointments();
 
-    const targetIndex = appts.findIndex((a: any) => a.id === id);
+    const targetIndex = appts.findIndex((a: Appointment) => a.id === id);
     if (targetIndex !== -1) {
       const oldStatus = appts[targetIndex].status;
       const newLog = {
@@ -96,21 +130,49 @@ export async function PATCH(req: Request) {
       await updateAppointment(id, { status, logs: updatedAppt.logs });
 
       if (status === 'accepted') {
-        // Send email first
-        await sendAppointmentEmail(updatedAppt, 'accepted');
-        
-        // Push to Google Calendar
-        console.log('=== Processing accepted appointment ===');
-        console.log('Date:', updatedAppt.date);
-        console.log('Time:', updatedAppt.time);
-        
+        const reservedSlot = await reserveBestAvailableSlot(
+          { date: updatedAppt.date, time: updatedAppt.time },
+          { excludeAppointmentId: id },
+        );
+
+        if (!reservedSlot) {
+          return NextResponse.json(
+            { error: "No alternative slots are available to accept this appointment." },
+            { status: 409 },
+          );
+        }
+
+        let finalAppointment = updatedAppt;
+
+        if (reservedSlot.rescheduled) {
+          const rescheduleLog = buildRescheduleLog(
+            { date: updatedAppt.date, time: updatedAppt.time },
+            reservedSlot.assigned,
+            "Requested slot conflicted with another booking.",
+          );
+          finalAppointment = {
+            ...updatedAppt,
+            date: reservedSlot.assigned.date,
+            time: reservedSlot.assigned.time,
+            logs: [...updatedAppt.logs, rescheduleLog],
+          };
+          await updateAppointment(id, {
+            date: finalAppointment.date,
+            time: finalAppointment.time,
+            logs: finalAppointment.logs,
+          });
+          await sendAppointmentEmail(finalAppointment, "rescheduled");
+        } else {
+          await sendAppointmentEmail(finalAppointment, "accepted");
+        }
+
         const calendarResult = await createCalendarEvent({
-          client: updatedAppt.client,
-          email: updatedAppt.email,
-          company: updatedAppt.company,
-          reason: updatedAppt.reason,
-          date: updatedAppt.date,
-          time: updatedAppt.time
+          client: finalAppointment.client,
+          email: finalAppointment.email,
+          company: finalAppointment.company,
+          reason: finalAppointment.reason,
+          date: finalAppointment.date,
+          time: finalAppointment.time
         });
 
         if (calendarResult.success && calendarResult.data?.id) {
@@ -122,10 +184,18 @@ export async function PATCH(req: Request) {
           // Still return success but include warning
           return NextResponse.json({ 
             success: true, 
+            rescheduled: reservedSlot.rescheduled,
+            scheduledFor: `${formatAppointmentDate(finalAppointment.date)} at ${finalAppointment.time}`,
             warning: 'Appointment accepted but failed to add to Google Calendar',
             calendarError: calendarResult.error 
           });
         }
+
+        return NextResponse.json({
+          success: true,
+          rescheduled: reservedSlot.rescheduled,
+          scheduledFor: `${formatAppointmentDate(finalAppointment.date)} at ${finalAppointment.time}`,
+        });
       } else if (status === 'cancelled' || status === 'declined') {
         await sendAppointmentEmail(updatedAppt, 'declined');
         
