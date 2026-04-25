@@ -11,6 +11,7 @@ const links = [
   { name: "Program", href: "#program" },
   { name: "About", href: "#about" },
   { name: "Profile", href: "#profile" },
+  { name: "Members", href: "/members" },
 ];
 
 export function Navbar() {
@@ -51,9 +52,12 @@ export function Navbar() {
               {link.name}
             </Link>
           ))}
-          <button className="bg-foreground text-background px-5 py-2 rounded-full text-sm font-medium hover:scale-105 transition-transform">
-            Apply for Mentorship
-          </button>
+          <Link
+            href="/members"
+            className="bg-foreground text-background px-5 py-2 rounded-full text-sm font-medium hover:scale-105 transition-transform"
+          >
+            Member Login
+          </Link>
         </div>
 
         {/* Mobile Menu Toggle */}
@@ -85,9 +89,12 @@ export function Navbar() {
                   {link.name}
                 </Link>
               ))}
-              <button className="bg-foreground text-background px-5 py-3 rounded-full text-sm font-medium mt-4">
-                Apply for Mentorship
-              </button>
+              <Link
+                href="/members"
+                className="bg-foreground text-background px-5 py-3 rounded-full text-sm font-medium mt-4 text-center"
+              >
+                Member Login
+              </Link>
             </div>
           </motion.div>
         )}

@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
 import {
-  addAppointment,
   deleteAppointment,
   loadAppointments,
   sendAppointmentEmail,
@@ -8,18 +7,20 @@ import {
 } from "@/lib/storage";
 import { createCalendarEvent, deleteCalendarEvent } from "@/lib/google-calendar";
 import { compareAppointmentSlots, formatAppointmentDate } from "@/lib/datetime";
-import {
-  buildRescheduleLog,
-  reserveBestAvailableSlot,
-} from "@/lib/scheduling";
+import { buildRescheduleLog, reserveBestAvailableSlot } from "@/lib/scheduling";
 import type { Appointment } from "@/lib/storage";
+import { requireAdmin } from "@/lib/auth-helpers";
 
 export async function GET() {
   try {
+    await requireAdmin();
     const appts = await loadAppointments();
     const sorted = [...appts].sort(compareAppointmentSlots);
     return NextResponse.json(sorted);
   } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     console.error("Failed to fetch appointments:", error);
     return NextResponse.json({ error: "Failed to fetch appointments" }, { status: 500 });
   }
@@ -27,8 +28,9 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
+    await requireAdmin();
     const body = await req.json();
-    const { action, id, client, company, email, reason, date, time } = body;
+    const { action, id, client } = body;
 
     if (action === "delete" || (!action && id && !client)) {
       const appts = await loadAppointments();
@@ -44,62 +46,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: true });
     }
 
-    // New Appointment Creation
-    if (client && email && date && time) {
-      const reservedSlot = await reserveBestAvailableSlot({ date, time });
-
-      if (!reservedSlot) {
-        return NextResponse.json(
-          { error: "No open appointment slots are available right now." },
-          { status: 409 },
-        );
-      }
-
-      const logs = [
-        {
-          status: "pending",
-          timestamp: new Date().toISOString(),
-          note: "Appointment request submitted via website form",
-        },
-      ];
-
-      if (reservedSlot.rescheduled) {
-        logs.push(
-          buildRescheduleLog(
-            { date, time },
-            reservedSlot.assigned,
-            "Requested slot was already booked.",
-          ),
-        );
-      }
-
-      const appt = {
-        id: `appt-${Date.now()}`,
-        client,
-        company: company || "N/A",
-        email,
-        reason: reason || "No reason provided",
-        date: reservedSlot.assigned.date,
-        time: reservedSlot.assigned.time,
-        requested: new Date().toLocaleDateString("en-US", { day: 'numeric', month: 'short', year: 'numeric' }),
-        status: "pending",
-        calendarEventId: null,
-        logs,
-      };
-      
-      await addAppointment(appt);
-      
-      return NextResponse.json({
-        success: true,
-        id: appt.id,
-        appointment: appt,
-        rescheduled: reservedSlot.rescheduled,
-        requestedSlot: reservedSlot.requested,
-      });
-    }
-
     return NextResponse.json({ error: "Invalid action or missing fields" }, { status: 400 });
   } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     console.error("Failed to process request:", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
@@ -107,6 +58,7 @@ export async function POST(req: Request) {
 
 export async function PATCH(req: Request) {
   try {
+    await requireAdmin();
     const body = await req.json();
     const { id, status } = body;
     const appts = await loadAppointments();
@@ -210,6 +162,9 @@ export async function PATCH(req: Request) {
 
     return NextResponse.json({ error: "Appointment not found" }, { status: 404 });
   } catch (error) {
+    if (error instanceof Error && error.message === "Unauthorized") {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
     console.error("Failed to update status:", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }

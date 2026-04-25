@@ -30,7 +30,7 @@ if (pool) {
   globalForDb.appointmentsPool = pool;
 }
 
-type AppointmentLog = {
+export type AppointmentLog = {
   status: string;
   timestamp: string;
   note?: string;
@@ -38,6 +38,7 @@ type AppointmentLog = {
 
 export type Appointment = {
   id: string;
+  memberId?: string | null;
   client: string;
   company: string;
   email: string;
@@ -53,6 +54,7 @@ export type Appointment = {
 
 type AppointmentRow = {
   id: string;
+  member_id: string | null;
   client: string;
   company: string | null;
   email: string;
@@ -103,6 +105,7 @@ function normalizeLogs(logs: AppointmentRow["logs"]): AppointmentLog[] {
 function normalizeAppointment(row: AppointmentRow): Appointment {
   return {
     id: row.id,
+    memberId: row.member_id,
     client: row.client,
     company: row.company ?? "N/A",
     email: row.email,
@@ -135,6 +138,7 @@ async function readLegacyAppointmentsFile(): Promise<Appointment[]> {
 
     return parsed.map((item: Partial<Appointment>) => ({
       id: item.id ?? `appt-${Date.now()}`,
+      memberId: item.memberId ?? null,
       client: item.client ?? "Unknown",
       company: item.company ?? "N/A",
       email: item.email ?? "",
@@ -158,6 +162,7 @@ async function initDatabase() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS appointments (
       id TEXT PRIMARY KEY,
+      member_id TEXT,
       client TEXT NOT NULL,
       company TEXT,
       email TEXT NOT NULL,
@@ -171,6 +176,10 @@ async function initDatabase() {
       created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  await db.query(
+    `ALTER TABLE appointments ADD COLUMN IF NOT EXISTS member_id TEXT`,
+  );
 
   const existingRows = await db.query(
     `SELECT COUNT(*)::int AS count FROM appointments`,
@@ -188,6 +197,7 @@ async function initDatabase() {
       `
         INSERT INTO appointments (
           id,
+          member_id,
           client,
           company,
           email,
@@ -199,11 +209,12 @@ async function initDatabase() {
           calendar_event_id,
           logs
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
         ON CONFLICT (id) DO NOTHING
       `,
       [
         appointment.id,
+        appointment.memberId ?? null,
         appointment.client,
         appointment.company,
         appointment.email,
@@ -219,7 +230,7 @@ async function initDatabase() {
   }
 }
 
-async function ensureDatabaseReady() {
+export async function ensureDatabaseReady() {
   if (dbInitialized) {
     return ensureDatabaseConfigured();
   }
@@ -234,6 +245,7 @@ export async function loadAppointments(): Promise<Appointment[]> {
   const result = await db.query(`
     SELECT
       id,
+      member_id,
       client,
       company,
       email,
@@ -252,13 +264,34 @@ export async function loadAppointments(): Promise<Appointment[]> {
   return result.rows.map((row) => normalizeAppointment(row as AppointmentRow));
 }
 
-export async function saveAppointments(appointments: Appointment[]) {
+export async function loadAppointmentsForMember(
+  memberId: string,
+): Promise<Appointment[]> {
   const db = await ensureDatabaseReady();
-  await db.query(`DELETE FROM appointments`);
+  const result = await db.query(
+    `
+      SELECT
+        id,
+        member_id,
+        client,
+        company,
+        email,
+        reason,
+        date,
+        time,
+        requested,
+        status,
+        calendar_event_id,
+        logs,
+        created_at
+      FROM appointments
+      WHERE member_id = $1
+      ORDER BY date ASC, time ASC
+    `,
+    [memberId],
+  );
 
-  for (const appointment of appointments) {
-    await addAppointment(appointment);
-  }
+  return result.rows.map((row) => normalizeAppointment(row as AppointmentRow));
 }
 
 export async function addAppointment(appointment: Appointment) {
@@ -268,6 +301,7 @@ export async function addAppointment(appointment: Appointment) {
     `
       INSERT INTO appointments (
         id,
+        member_id,
         client,
         company,
         email,
@@ -279,8 +313,9 @@ export async function addAppointment(appointment: Appointment) {
         calendar_event_id,
         logs
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb)
       ON CONFLICT (id) DO UPDATE SET
+        member_id = EXCLUDED.member_id,
         client = EXCLUDED.client,
         company = EXCLUDED.company,
         email = EXCLUDED.email,
@@ -294,6 +329,7 @@ export async function addAppointment(appointment: Appointment) {
     `,
     [
       appointment.id,
+      appointment.memberId ?? null,
       appointment.client,
       appointment.company || "N/A",
       appointment.email,
@@ -315,6 +351,7 @@ export async function updateAppointment(
   const db = await ensureDatabaseReady();
 
   const columnMap: Record<string, string> = {
+    memberId: "member_id",
     client: "client",
     company: "company",
     email: "email",
